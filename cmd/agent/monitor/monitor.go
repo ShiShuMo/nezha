@@ -5,7 +5,6 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -20,15 +19,22 @@ import (
 	"github.com/naiba/nezha/model"
 )
 
-var Version string = "debug"
-var netInSpeed, netOutSpeed, netInTransfer, netOutTransfer, lastUpdate uint64
-var expectDiskFsTypes = []string{
-	"apfs", "ext4", "ext3", "ext2", "f2fs", "reiserfs", "jfs", "btrfs", "fuseblk", "zfs", "simfs", "ntfs", "fat32", "exfat", "xfs",
-}
-var excludeNetInterfaces = []string{
-	"lo", "tun", "docker", "veth", "br-", "vmbr", "vnet", "kube",
-}
-var getMacDiskNo = regexp.MustCompile(`\/dev\/disk(\d)s.*`)
+var (
+	Version           string = "debug"
+	expectDiskFsTypes        = []string{
+		"apfs", "ext4", "ext3", "ext2", "f2fs", "reiserfs", "jfs", "btrfs",
+		"fuseblk", "zfs", "simfs", "ntfs", "fat32", "exfat", "xfs", "fuse.rclone",
+	}
+	excludeNetInterfaces = []string{
+		"lo", "tun", "docker", "veth", "br-", "vmbr", "vnet", "kube",
+	}
+	getMacDiskNo = regexp.MustCompile(`\/dev\/disk(\d)s.*`)
+)
+
+var (
+	netInSpeed, netOutSpeed, netInTransfer, netOutTransfer, lastUpdateNetStats uint64
+	cachedBootTime                                                             time.Time
+)
 
 func GetHost() *model.Host {
 	hi, _ := host.Info()
@@ -58,6 +64,10 @@ func GetHost() *model.Host {
 		swapMemTotal = mv.SwapTotal
 	}
 
+	if cachedBootTime.IsZero() {
+		cachedBootTime = time.Unix(int64(hi.BootTime), 0)
+	}
+
 	return &model.Host{
 		Platform:        hi.OS,
 		PlatformVersion: hi.PlatformVersion,
@@ -74,13 +84,12 @@ func GetHost() *model.Host {
 	}
 }
 
-type GetStateConfig struct {
-	SkipConnectionCount bool
-	SkipProcessCount    bool
-}
+func GetState(skipConnectionCount bool, skipProcsCount bool) *model.HostState {
+	var procs []int32
+	if !skipProcsCount {
+		procs, _ = process.Pids()
+	}
 
-func GetState(conf GetStateConfig) *model.HostState {
-	hi, _ := host.Info()
 	mv, _ := mem.VirtualMemory()
 
 	var swapMemUsed uint64
@@ -97,12 +106,12 @@ func GetState(conf GetStateConfig) *model.HostState {
 	if err == nil {
 		cpuPercent = cp[0]
 	}
+
 	_, diskUsed := getDiskTotalAndUsed()
 	loadStat, _ := load.Avg()
 
 	var tcpConnCount, udpConnCount uint64
-
-	if !conf.SkipConnectionCount {
+	if !skipConnectionCount {
 		conns, _ := net.Connections("all")
 		for i := 0; i < len(conns); i++ {
 			switch conns[i].Type {
@@ -114,39 +123,22 @@ func GetState(conf GetStateConfig) *model.HostState {
 		}
 	}
 
-	var processCount uint64
-	if !conf.SkipProcessCount {
-		ps, _ := process.Pids()
-		processCount = uint64(len(ps))
-		// log.Println("pids", len(ps), err)
-		// var threads uint64
-		// for i := 0; i < len(ps); i++ {
-		// 	p, err := process.NewProcess(ps[i])
-		// 	if err != nil {
-		// 		continue
-		// 	}
-		// 	c, _ := p.NumThreads()
-		// 	threads += uint64(c)
-		// }
-		// log.Println("threads", threads)
-	}
-
 	return &model.HostState{
 		CPU:            cpuPercent,
 		MemUsed:        mv.Total - mv.Available,
 		SwapUsed:       swapMemUsed,
 		DiskUsed:       diskUsed,
-		NetInTransfer:  atomic.LoadUint64(&netInTransfer),
-		NetOutTransfer: atomic.LoadUint64(&netOutTransfer),
-		NetInSpeed:     atomic.LoadUint64(&netInSpeed),
-		NetOutSpeed:    atomic.LoadUint64(&netOutSpeed),
-		Uptime:         hi.Uptime,
+		NetInTransfer:  netInTransfer,
+		NetOutTransfer: netOutTransfer,
+		NetInSpeed:     netInSpeed,
+		NetOutSpeed:    netOutSpeed,
+		Uptime:         uint64(time.Since(cachedBootTime).Seconds()),
 		Load1:          loadStat.Load1,
 		Load5:          loadStat.Load5,
 		Load15:         loadStat.Load15,
 		TcpConnCount:   tcpConnCount,
 		UdpConnCount:   udpConnCount,
-		ProcessCount:   processCount,
+		ProcessCount:   uint64(len(procs)),
 	}
 }
 
@@ -162,14 +154,14 @@ func TrackNetworkSpeed() {
 			innerNetOutTransfer += v.BytesSent
 		}
 		now := uint64(time.Now().Unix())
-		diff := now - atomic.LoadUint64(&lastUpdate)
+		diff := now - lastUpdateNetStats
 		if diff > 0 {
-			atomic.StoreUint64(&netInSpeed, (innerNetInTransfer-atomic.LoadUint64(&netInTransfer))/diff)
-			atomic.StoreUint64(&netOutSpeed, (innerNetOutTransfer-atomic.LoadUint64(&netOutTransfer))/diff)
+			netInSpeed = (innerNetInTransfer - netInTransfer) / diff
+			netOutSpeed = (innerNetOutTransfer - netOutTransfer) / diff
 		}
-		atomic.StoreUint64(&netInTransfer, innerNetInTransfer)
-		atomic.StoreUint64(&netOutTransfer, innerNetOutTransfer)
-		atomic.StoreUint64(&lastUpdate, now)
+		netInTransfer = innerNetInTransfer
+		netOutTransfer = innerNetOutTransfer
+		lastUpdateNetStats = now
 	}
 }
 

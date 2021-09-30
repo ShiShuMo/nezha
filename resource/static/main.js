@@ -55,7 +55,8 @@ function showFormModal(modelSelector, formID, URL, getData) {
                 item.name === "RequestMethod" ||
                 item.name === "DisplayIndex" ||
                 item.name === "Type" ||
-                item.name === "Cover"
+                item.name === "Cover" ||
+                item.name === "Duration"
               ) {
                 obj[item.name] = parseInt(item.value);
               } else {
@@ -155,6 +156,30 @@ function addOrEditNotification(notification) {
   );
 }
 
+function connectToServer(id) {
+  post('/terminal', { Host: window.location.host, Protocol: window.location.protocol, ID: id })
+}
+
+function post(path, params, method = 'post') {
+  const form = document.createElement('form');
+  form.method = method;
+  form.action = path;
+  form.target = "_blank";
+
+  for (const key in params) {
+    if (params.hasOwnProperty(key)) {
+      const hiddenField = document.createElement('input');
+      hiddenField.type = 'hidden';
+      hiddenField.name = key;
+      hiddenField.value = params[key];
+      form.appendChild(hiddenField);
+    }
+  }
+  document.body.appendChild(form);
+  form.submit();
+  document.body.removeChild(form);
+}
+
 function addOrEditServer(server, conf) {
   const modal = $(".server.modal");
   modal.children(".header").text((server ? "修改" : "添加") + "服务器");
@@ -194,6 +219,7 @@ function addOrEditMonitor(monitor) {
   modal.find("input[name=ID]").val(monitor ? monitor.ID : null);
   modal.find("input[name=Name]").val(monitor ? monitor.Name : null);
   modal.find("input[name=Target]").val(monitor ? monitor.Target : null);
+  modal.find("input[name=Duration]").val(monitor && monitor.Duration ? monitor.Duration : 30);
   modal.find("select[name=Type]").val(monitor ? monitor.Type : 1);
   modal.find("select[name=Cover]").val(monitor ? monitor.Cover : 0);
   if (monitor && monitor.Notify) {

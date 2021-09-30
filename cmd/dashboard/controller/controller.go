@@ -5,6 +5,7 @@ import (
 	"html/template"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"code.cloudfoundry.org/bytefmt"
@@ -28,10 +29,10 @@ func ServeWeb(port uint) *http.Server {
 			return t.Format("2006年1月2号 15:04:05")
 		},
 		"safe": func(s string) template.HTML {
-			return template.HTML(s)
+			return template.HTML(s) // #nosec
 		},
 		"tag": func(s string) template.HTML {
-			return template.HTML(`<` + s + `>`)
+			return template.HTML(`<` + s + `>`) // #nosec
 		},
 		"stf": func(s uint64) string {
 			return time.Unix(int64(s), 0).Format("2006年1月2号 15:04")
@@ -111,7 +112,7 @@ func ServeWeb(port uint) *http.Server {
 		},
 	})
 	r.Static("/static", "resource/static")
-	r.LoadHTMLGlob("resource/template/**/*")
+	r.LoadHTMLGlob("resource/template/**/*.html")
 	routers(r)
 
 	page404 := func(c *gin.Context) {
@@ -135,7 +136,7 @@ func ServeWeb(port uint) *http.Server {
 
 func routers(r *gin.Engine) {
 	// 通用页面
-	cp := commonPage{r}
+	cp := commonPage{r: r, terminals: make(map[string]*terminalContext), terminalsLock: new(sync.Mutex)}
 	cp.serve()
 	// 游客页面
 	gp := guestPage{r}

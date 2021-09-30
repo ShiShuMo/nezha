@@ -1,7 +1,7 @@
 package dao
 
 import (
-	"crypto/md5"
+	"crypto/md5" // #nosec
 	"encoding/hex"
 	"log"
 	"sync"
@@ -15,6 +15,14 @@ const firstNotificationDelay = time.Minute * 15
 // 通知方式
 var notifications []model.Notification
 var notificationsLock sync.RWMutex
+
+func LoadNotifications() {
+	notificationsLock.Lock()
+	if err := DB.Find(&notifications).Error; err != nil {
+		panic(err)
+	}
+	notificationsLock.Unlock()
+}
 
 func OnRefreshOrAddNotification(n model.Notification) {
 	notificationsLock.Lock()
@@ -45,7 +53,7 @@ func OnDeleteNotification(id uint64) {
 func SendNotification(desc string, muteable bool) {
 	if muteable {
 		// 通知防骚扰策略
-		nID := hex.EncodeToString(md5.New().Sum([]byte(desc)))
+		nID := hex.EncodeToString(md5.New().Sum([]byte(desc))) // #nosec
 		var flag bool
 		if cacheN, has := Cache.Get(nID); has {
 			nHistory := cacheN.(NotificationHistory)
@@ -71,7 +79,7 @@ func SendNotification(desc string, muteable bool) {
 
 		if !flag {
 			if Conf.Debug {
-				log.Println("muted notification", desc, muteable)
+				log.Println("NEZHA>> 静音的重复通知：", desc, muteable)
 			}
 			return
 		}
@@ -80,6 +88,8 @@ func SendNotification(desc string, muteable bool) {
 	notificationsLock.RLock()
 	defer notificationsLock.RUnlock()
 	for i := 0; i < len(notifications); i++ {
-		notifications[i].Send(desc)
+		if err := notifications[i].Send(desc); err != nil {
+			log.Println("NEZHA>> 发送通知失败：", err)
+		}
 	}
 }

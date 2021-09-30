@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/robfig/cron/v3"
 
 	"github.com/naiba/nezha/model"
 	"github.com/naiba/nezha/pkg/mygin"
@@ -82,8 +81,8 @@ func (ma *memberAPI) delete(c *gin.Context) {
 			dao.CronLock.RLock()
 			defer dao.CronLock.RUnlock()
 			cr := dao.Crons[id]
-			if cr != nil && cr.CronID != 0 {
-				dao.Cron.Remove(cr.CronID)
+			if cr != nil && cr.CronJobID != 0 {
+				dao.Cron.Remove(cr.CronJobID)
 			}
 			delete(dao.Crons, id)
 		}
@@ -204,6 +203,7 @@ type monitorForm struct {
 	Cover          uint8
 	Notify         string
 	SkipServersRaw string
+	Duration       uint64
 }
 
 func (ma *memberAPI) addOrEditMonitor(c *gin.Context) {
@@ -218,6 +218,7 @@ func (ma *memberAPI) addOrEditMonitor(c *gin.Context) {
 		m.SkipServersRaw = mf.SkipServersRaw
 		m.Cover = mf.Cover
 		m.Notify = mf.Notify == "on"
+		m.Duration = mf.Duration
 	}
 	if err == nil {
 		if m.ID == 0 {
@@ -226,14 +227,15 @@ func (ma *memberAPI) addOrEditMonitor(c *gin.Context) {
 			err = dao.DB.Save(&m).Error
 		}
 	}
+	if err == nil {
+		err = dao.ServiceSentinelShared.OnMonitorUpdate(m)
+	}
 	if err != nil {
 		c.JSON(http.StatusOK, model.Response{
 			Code:    http.StatusBadRequest,
 			Message: fmt.Sprintf("请求错误：%s", err),
 		})
 		return
-	} else {
-		dao.ServiceSentinelShared.OnMonitorUpdate()
 	}
 	c.JSON(http.StatusOK, model.Response{
 		Code: http.StatusOK,
@@ -264,18 +266,21 @@ func (ma *memberAPI) addOrEditCron(c *gin.Context) {
 		cr.Cover = cf.Cover
 		err = json.Unmarshal([]byte(cf.ServersRaw), &cr.Servers)
 	}
-	if err == nil {
-		_, err = cron.ParseStandard(cr.Scheduler)
-	}
+	tx := dao.DB.Begin()
 	if err == nil {
 		if cf.ID == 0 {
-			err = dao.DB.Create(&cr).Error
+			err = tx.Create(&cr).Error
 		} else {
-			err = dao.DB.Save(&cr).Error
+			err = tx.Save(&cr).Error
 		}
 	}
 	if err == nil {
-		cr.CronID, err = dao.Cron.AddFunc(cr.Scheduler, dao.CronTrigger(cr))
+		cr.CronJobID, err = dao.Cron.AddFunc(cr.Scheduler, dao.CronTrigger(cr))
+	}
+	if err == nil {
+		err = tx.Commit().Error
+	} else {
+		tx.Rollback()
 	}
 	if err != nil {
 		c.JSON(http.StatusOK, model.Response{
@@ -288,8 +293,8 @@ func (ma *memberAPI) addOrEditCron(c *gin.Context) {
 	dao.CronLock.Lock()
 	defer dao.CronLock.Unlock()
 	crOld := dao.Crons[cr.ID]
-	if crOld != nil && crOld.CronID != 0 {
-		dao.Cron.Remove(cron.EntryID(crOld.ID))
+	if crOld != nil && crOld.CronJobID != 0 {
+		dao.Cron.Remove(crOld.CronJobID)
 	}
 
 	delete(dao.Crons, cr.ID)
@@ -451,7 +456,6 @@ type settingForm struct {
 	ViewPassword               string
 	EnableIPChangeNotification string
 	IgnoredIPNotification      string
-	Oauth2Type                 string
 	GRPCHost                   string
 	Cover                      uint8
 }
@@ -473,7 +477,6 @@ func (ma *memberAPI) updateSetting(c *gin.Context) {
 	dao.Conf.Site.Theme = sf.Theme
 	dao.Conf.Site.CustomCode = sf.CustomCode
 	dao.Conf.Site.ViewPassword = sf.ViewPassword
-	dao.Conf.Oauth2.Type = sf.Oauth2Type
 	dao.Conf.Oauth2.Admin = sf.Admin
 	if err := dao.Conf.Save(); err != nil {
 		c.JSON(http.StatusOK, model.Response{
